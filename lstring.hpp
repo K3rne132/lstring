@@ -21,54 +21,57 @@ private:
 
 
 	void ReAlloc(const _Elem* source, size_t bytes, size_t position = 0) {
-		std::allocator<_Elem> _Alloc;
+		_Allocator _Alloc;
 		const size_t newSize = position + bytes + 1;
-		if (_Data == nullptr) {
-			_Data = _Alloc.allocate(newSize);
-			memset(_Data, 0, newSize); //can be optimized
-			memcpy(_Data, source, bytes);
-			_Capacity = newSize;
-		}
-		else {
+		if (_Data != nullptr) {
 			if (newSize <= _Capacity) {
 				memcpy(_Data + position, source, bytes);
+				_Data[position + bytes] = 0;
 			}
 			else {
-				float tempCapacity = static_cast<float>(_Capacity);
-				while (tempCapacity < newSize) {
-					tempCapacity = ceil(tempCapacity * 1.5f);
-				}
+				const size_t newCapacity = static_cast<const size_t>(
+					ceil(static_cast<float>(newSize) * 1.5f));
 
-				const size_t newCapacity = static_cast<size_t>(tempCapacity);
 				_Elem* oldData = _Data;
 				_Data = _Alloc.allocate(newCapacity);
 				memcpy(_Data, oldData, position);
-				memcpy(_Data + position, source, bytes); //to check
+				memcpy(_Data + position, source, bytes);
+				_Data[position + bytes] = 0;
 
 				_Alloc.deallocate(oldData, _Capacity);
 				_Capacity = newCapacity;
 			}
 		}
-		_Length = position + _Traits::length(source); //long time
+		else {
+			_Data = _Alloc.allocate(newSize);
+			memcpy(_Data, source, bytes);
+			_Data[bytes] = 0;
+			_Capacity = newSize;
+		}
+		_Length = position + bytes;
 	}
 
 
 
 public:
-	basic_lstring() :
+	basic_lstring() : //OK
 		_Data(nullptr),
 		_Capacity(0),
 		_Length(0) {}
 
-	basic_lstring(const _Elem* _ptr) :
+	basic_lstring(const _Elem* _ptr) : //900% slower
 		_Data(nullptr),
 		_Capacity(0),
 		_Length(0) {
-		size_t newSize = _Traits::length(_ptr);
-		ReAlloc(_ptr, newSize);
+		_Allocator _Alloc;
+		size_t newSize = _Traits::length(_ptr) + 1;
+		_Data = _Alloc.allocate(newSize);
+		memcpy(_Data, _ptr, newSize);
+		_Capacity = newSize;
+		_Length = newSize - 1;
 	}
 
-	basic_lstring(const basic_lstring& lstr) :
+	basic_lstring(const basic_lstring& lstr) ://2700% slower
 		_Data(nullptr),
 		_Capacity(lstr._Capacity),
 		_Length(lstr._Length) {
@@ -77,7 +80,7 @@ public:
 		memcpy(_Data, lstr.c_str(), _Capacity);
 	}
 
-	basic_lstring(basic_lstring&& lstr) :
+	basic_lstring(basic_lstring&& lstr) : //OK
 		_Data(lstr._Data),
 		_Capacity(lstr._Capacity),
 		_Length(lstr._Length) {
@@ -86,46 +89,53 @@ public:
 		lstr._Length = 0;
 	}
 
-	virtual ~basic_lstring() {
-		_Allocator _Alloc;
-		_Alloc.deallocate(_Data, _Capacity);
-		_Data = nullptr;
-		_Capacity = 0;
-		_Length = 0;
+	virtual ~basic_lstring() { //OK
+		if (_Data != nullptr) {
+			_Allocator _Alloc;
+			_Alloc.deallocate(_Data, _Capacity);
+			_Data = nullptr;
+			_Capacity = 0;
+			_Length = 0;
+		}
 	}
 
 
 
-	void append(const _Elem* _ptr, size_t bytes) {
-		ReAlloc(_ptr, bytes, _Length);
+	void append(const _Elem* _ptr, size_t bytes) { //200% slower
+		size_t ptrLen = 1;
+		if (ptrLen > bytes)
+			ReAlloc(_ptr, bytes, _Length);
+		else
+			ReAlloc(_ptr, ptrLen, _Length);
 	}
 	
-	const _Elem* c_str() const {
+	const _Elem* c_str() const { //OK
 		if (_Data != nullptr)
 			return _Data;
 		return "";
 	}
 
-	size_t capacity() const {
+	size_t capacity() const { //OK
 		return _Capacity;
 	}
 
-	void clear() {
-		memset(_Data, 0, _Capacity); //OK???
+	void clear() { //OK
+		if (_Data != nullptr)
+			_Data[0] = 0;
 		_Length = 0;
 	}
 
-	size_t length() const {
+	size_t length() const { //OK
 		return _Length;
 	}
 
-	void reserve(size_t newcap) {
-		_Allocator _Alloc;
-		if (newcap > _Length) {
+	void reserve(size_t newcap) { //OK
+		if (newcap > _Capacity) {
+			_Allocator _Alloc;
 			_Elem* oldData = _Data;
 			
 			_Data = _Alloc.allocate(newcap);
-			memset(_Data, 0, newcap); //can be optimized
+			_Data[_Length] = 0;
 			if (oldData != nullptr) {
 				memcpy(_Data, oldData, _Length);
 				_Alloc.deallocate(oldData, _Capacity);
@@ -134,39 +144,40 @@ public:
 		}
 	}
 
-	void shrink_to_fit() {
-		_Allocator _Alloc;
+	void shrink_to_fit() { //OK
 		size_t newSize = _Length + 1;
-		if (_Data != nullptr) {
-			_Elem* oldData = _Data;
-			_Data = _Alloc.allocate(newSize);
-			memcpy(_Data, oldData, newSize);
-			_Alloc.deallocate(oldData, _Capacity);
-			_Capacity = newSize;
-			
-		}
-		else {
-			_Data = _Alloc.allocate(newSize); //to check
+		if (newSize < _Capacity) {
+			_Allocator _Alloc;
+			if (_Data != nullptr) {
+				_Elem* oldData = _Data;
+				_Data = _Alloc.allocate(newSize);
+				memcpy(_Data, oldData, newSize);
+				_Alloc.deallocate(oldData, _Capacity);
+				_Capacity = newSize;
+
+			}
+			else {
+				_Data = _Alloc.allocate(newSize);
+				_Data[0] = 0;
+			}
 		}
 	}
 
 
 
-	basic_lstring& operator=(const _Elem* _ptr) {
-		size_t newSize = _Traits::length(_ptr); //long time
-		if(_Data != nullptr)
-			memset(_Data + newSize, 0, _Capacity - newSize); //long time
+	basic_lstring& operator=(const _Elem* _ptr) { //10% slower
+		size_t newSize = _Traits::length(_ptr);
 		ReAlloc(_ptr, newSize);
 		return *this;
 	}
 
-	basic_lstring& operator+=(const _Elem* _ptr) {
-		size_t addSize = _Traits::length(_ptr); //long time
-		append(_ptr, addSize);
+	basic_lstring& operator+=(const _Elem* _ptr) { //300% slower
+		size_t addSize = _Traits::length(_ptr);
+		ReAlloc(_ptr, addSize, _Length);
 		return *this;
 	}
 
-	friend std::ostream& operator<<(std::ostream& os, const basic_lstring& str) {
+	friend std::ostream& operator<<(std::ostream& os, const basic_lstring& str) { //OK
 		os << str.c_str();
 		return os;
 	}
